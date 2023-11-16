@@ -28,26 +28,26 @@ static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
 
 typedef struct pg_errors_header
 {
-	uint32 magic;
-	uint32 pg_version_num;
-} pg_errors_header;
+	uint32		magic;
+	uint32		pg_version_num;
+}			pg_errors_header;
 
 typedef struct pg_errors_counter
 {
-	pg_atomic_uint64  statement_cancel;
-	pg_atomic_uint64  statement_timeout;
-    pg_atomic_uint64  lock_timeout;
-    pg_atomic_uint64  idle_in_tx_timeout;
-} pg_errors_counter;
+	pg_atomic_uint64 statement_cancel;
+	pg_atomic_uint64 statement_timeout;
+	pg_atomic_uint64 lock_timeout;
+	pg_atomic_uint64 idle_in_tx_timeout;
+}			pg_errors_counter;
 
 typedef struct pg_errors_shmem
 {
-	LWLock *lock; /* protect shmem */
+	LWLock	   *lock;			/* protect shmem */
 	pg_errors_counter count;
-} pg_errors_shmem;
+}			pg_errors_shmem;
 
 /* Shared memory state */
-static pg_errors_shmem *shmem = NULL;
+static pg_errors_shmem * shmem = NULL;
 
 /*---- Function declarations ----*/
 void		_PG_init(void);
@@ -70,40 +70,42 @@ PG_FUNCTION_INFO_V1(pg_errors_reset);
 /*
  * Module load callback
  */
-void _PG_init(void)
+void
+_PG_init(void)
 {
 
 	if (!process_shared_preload_libraries_in_progress)
 		return;
 
 	RequestAddinShmemSpace(
-		MAXALIGN(sizeof(pg_errors_shmem))
+						   MAXALIGN(sizeof(pg_errors_shmem))
 		);
 	RequestNamedLWLockTranche("pg_errors", 1);
 
 	/* Setup hooks */
-    prev_log_hook = emit_log_hook;
-    emit_log_hook = pg_errors_emit_log;
+	prev_log_hook = emit_log_hook;
+	emit_log_hook = pg_errors_emit_log;
 
-    prev_shmem_startup_hook = shmem_startup_hook;
+	prev_shmem_startup_hook = shmem_startup_hook;
 	shmem_startup_hook = pg_errors_shmem_startup;
 }
 
 /*
  * Module unload callback
  */
-void _PG_fini(void)
+void
+_PG_fini(void)
 {
 	shmem_startup_hook = prev_shmem_startup_hook;
-    emit_log_hook = prev_log_hook;
+	emit_log_hook = prev_log_hook;
 }
 
 /* init shmem for module */
 void
 pg_errors_shmem_startup(void)
 {
-    // we are bound to do so
-    if (prev_shmem_startup_hook)
+	/* we are bound to do so */
+	if (prev_shmem_startup_hook)
 		prev_shmem_startup_hook();
 	pg_errors_shmem_startup_internal();
 }
@@ -111,11 +113,11 @@ pg_errors_shmem_startup(void)
 void
 pg_errors_emit_log(ErrorData *edata)
 {
-	// we are bound to do so
+	/* we are bound to do so */
 	if (prev_log_hook)
 		prev_log_hook(edata);
 
-    pg_errors_emit_log_internal(edata);
+	pg_errors_emit_log_internal(edata);
 }
 
 Datum
@@ -142,15 +144,15 @@ pg_errors_reset(PG_FUNCTION_ARGS)
 Datum
 pg_errors_get_internal(void)
 {
-	bool      nulls[4];
-	Datum     values[4];
-	HeapTuple htup;
-	TupleDesc tupdesc;
+	bool		nulls[4];
+	Datum		values[4];
+	HeapTuple	htup;
+	TupleDesc	tupdesc;
 
 #if PG_VERSION_NUM >= 120000
-		tupdesc = CreateTemplateTupleDesc(4);
+	tupdesc = CreateTemplateTupleDesc(4);
 #else
-		tupdesc = CreateTemplateTupleDesc(4, false);
+	tupdesc = CreateTemplateTupleDesc(4, false);
 #endif
 
 	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "statement_cancel",
@@ -164,19 +166,19 @@ pg_errors_get_internal(void)
 	tupdesc = BlessTupleDesc(tupdesc);
 
 	values[0] = UInt64GetDatum(
-		pg_atomic_read_u64(&(shmem->count.statement_cancel)));
+							   pg_atomic_read_u64(&(shmem->count.statement_cancel)));
 	nulls[0] = false;
 
 	values[1] = UInt64GetDatum(
-		pg_atomic_read_u64(&(shmem->count.statement_timeout)));
+							   pg_atomic_read_u64(&(shmem->count.statement_timeout)));
 	nulls[1] = false;
 
 	values[2] = UInt64GetDatum(
-		pg_atomic_read_u64(&(shmem->count.lock_timeout)));
+							   pg_atomic_read_u64(&(shmem->count.lock_timeout)));
 	nulls[2] = false;
 
 	values[3] = UInt64GetDatum(
-		pg_atomic_read_u64(&(shmem->count.idle_in_tx_timeout)));
+							   pg_atomic_read_u64(&(shmem->count.idle_in_tx_timeout)));
 	nulls[3] = false;
 
 	htup = heap_form_tuple(tupdesc, values, nulls);
@@ -201,7 +203,7 @@ pg_errors_emit_log_internal(ErrorData *edata)
 	if (in_error_recursion_trouble())
 		return;
 
-    /* increment counters */
+	/* increment counters */
 	switch (edata->sqlerrcode)
 	{
 		case ERRCODE_QUERY_CANCELED:
@@ -217,24 +219,24 @@ pg_errors_emit_log_internal(ErrorData *edata)
 			pg_atomic_add_fetch_u64(&shmem->count.idle_in_tx_timeout, 1);
 			break;
 	}
-	//elog(WARNING, "SQL CODE: %s", unpack_sql_state(edata->sqlerrcode));
+	/* elog(WARNING, "SQL CODE: %s", unpack_sql_state(edata->sqlerrcode)); */
 }
 
 void
 pg_errors_shmem_startup_internal(void)
 {
-    FILE    *f = NULL;
-	bool found = false;
+	FILE	   *f = NULL;
+	bool		found = false;
 	pg_errors_header hdr;
 	pg_errors_counter temp;
 
-    /*
+	/*
 	 * Create or attach to the shared memory
 	 */
 	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
 	shmem = ShmemInitStruct("pg_errors",
-						   sizeof(pg_errors_shmem),
-						   &found);
+							sizeof(pg_errors_shmem),
+							&found);
 	LWLockRelease(AddinShmemInitLock);
 
 	/*
@@ -255,19 +257,19 @@ pg_errors_shmem_startup_internal(void)
 	pg_atomic_exchange_u64(&shmem->count.lock_timeout, 0);
 	pg_atomic_exchange_u64(&shmem->count.idle_in_tx_timeout, 0);
 
-    /*
+	/*
 	 * Attempt to load old statistics
 	 */
 	f = AllocateFile(PG_ERRORS_DUMP_FILE, PG_BINARY_R);
 	if (f == NULL)
 	{
 		if (errno == ENOENT)
-			return; /* No existing persisted file, so we're done */
+			return;				/* No existing persisted file, so we're done */
 
 		/* failed to open file due to some external reason */
 		ereport(WARNING,
-			(errcode_for_file_access(),
-			 errmsg("could not allocate file \"%s\": %m", PG_ERRORS_DUMP_FILE)));
+				(errcode_for_file_access(),
+				 errmsg("could not allocate file \"%s\": %m", PG_ERRORS_DUMP_FILE)));
 		goto err;
 	}
 
@@ -275,16 +277,16 @@ pg_errors_shmem_startup_internal(void)
 		(fread(&temp, sizeof(pg_errors_counter), 1, f) != 1))
 	{
 		ereport(WARNING,
-			(errcode_for_file_access(),
-			 errmsg("could not read file \"%s\": %m", PG_ERRORS_DUMP_FILE)));
+				(errcode_for_file_access(),
+				 errmsg("could not read file \"%s\": %m", PG_ERRORS_DUMP_FILE)));
 		goto err;
 	}
 
-	//	LWLockAcquire(shmem->lock, LW_EXCLUSIVE);
-	//	rc = fread(&(shmem->count), sizeof(pg_errors_counter), 1, f);
-	//	LWLockRelease(shmem->lock);
+	/* LWLockAcquire(shmem->lock, LW_EXCLUSIVE); */
+	/* rc = fread(&(shmem->count), sizeof(pg_errors_counter), 1, f); */
+	/* LWLockRelease(shmem->lock); */
 
-	// validate header
+	/* validate header */
 	if (hdr.magic != PG_ERRORS_HEADER_MAGIC || hdr.pg_version_num != PG_MAJORVERSION_NUM)
 		goto err;
 
@@ -296,8 +298,8 @@ pg_errors_shmem_startup_internal(void)
 err:
 	if (f && FreeFile(f))
 		ereport(WARNING,
-			(errcode_for_file_access(),
-			 errmsg("could not close file \"%s\": %m", PG_ERRORS_DUMP_FILE)));
+				(errcode_for_file_access(),
+				 errmsg("could not close file \"%s\": %m", PG_ERRORS_DUMP_FILE)));
 	unlink(PG_ERRORS_DUMP_FILE);
 }
 
@@ -307,7 +309,7 @@ err:
 void
 pg_errors_shmem_shutdown(int code, Datum arg)
 {
-	FILE *f = NULL;
+	FILE	   *f = NULL;
 	pg_errors_header hdr;
 
 	hdr.magic = PG_ERRORS_HEADER_MAGIC;
@@ -318,22 +320,23 @@ pg_errors_shmem_shutdown(int code, Datum arg)
 		return;
 
 	/*
-	 * Open temp file, dump stats, fsync and rename into place, so we atomically replace any old one.
+	 * Open temp file, dump stats, fsync and rename into place, so we
+	 * atomically replace any old one.
 	 */
 	f = AllocateFile(PG_ERRORS_DUMP_FILE ".tmp", PG_BINARY_W);
 	if (f == NULL)
 		ereport(WARNING,
-			(errcode_for_file_access(),
-			 errmsg("could not open for writing file \"%s\": %m",
-					PG_ERRORS_DUMP_FILE ".tmp")));
+				(errcode_for_file_access(),
+				 errmsg("could not open for writing file \"%s\": %m",
+						PG_ERRORS_DUMP_FILE ".tmp")));
 
 	else if ((fwrite(&hdr, sizeof(pg_errors_header), 1, f) == 1) &&
-			  fwrite(&(shmem->count), sizeof(pg_errors_counter), 1, f) == 1)
-				durable_rename(PG_ERRORS_DUMP_FILE ".tmp", PG_ERRORS_DUMP_FILE, WARNING);
+			 fwrite(&(shmem->count), sizeof(pg_errors_counter), 1, f) == 1)
+		durable_rename(PG_ERRORS_DUMP_FILE ".tmp", PG_ERRORS_DUMP_FILE, WARNING);
 
 	if (f && FreeFile(f))
 		ereport(WARNING,
-			(errcode_for_file_access(),
-			 errmsg("could not write file \"%s\": %m",
-					PG_ERRORS_DUMP_FILE ".tmp")));
+				(errcode_for_file_access(),
+				 errmsg("could not write file \"%s\": %m",
+						PG_ERRORS_DUMP_FILE ".tmp")));
 }
