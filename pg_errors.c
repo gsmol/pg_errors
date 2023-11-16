@@ -6,6 +6,8 @@
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "postmaster/autovacuum.h"
+#include "storage/lwlock.h"
+#include "storage/shmem.h"
 
 #if PG_VERSION_NUM < 120000
 #include "catalog/pg_type.h"
