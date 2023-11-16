@@ -1,0 +1,5 @@
+# pg_errors extension
+comment = 'track error codes'
+default_version = '1.0'
+module_pathname = '$libdir/pg_errors'
+relocatable = true

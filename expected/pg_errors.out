@@ -1,0 +1,49 @@
+CREATE EXTENSION pg_errors;
+--
+-- simple and compound statements
+--
+SELECT pg_errors_reset();
+ pg_errors_reset 
+-----------------
+ 
+(1 row)
+
+SELECT * FROM pg_errors;
+ statement_cancel | statement_timeout | lock_timeout | idle_in_tx_timeout 
+------------------+-------------------+--------------+--------------------
+                0 |                 0 |            0 |                  0
+(1 row)
+
+-- statement_timeout
+BEGIN;
+SET LOCAL statement_timeout to '1s';
+SELECT pg_sleep(10);
+ERROR:  canceling statement due to statement timeout
+COMMIT;
+-- error
+SET LOCAL statement_timeout to 1s;
+ERROR:  syntax error at or near "s"
+LINE 1: SET LOCAL statement_timeout to 1s;
+                                        ^
+-- check that counter are incremented
+SELECT * FROM pg_errors;
+ statement_cancel | statement_timeout | lock_timeout | idle_in_tx_timeout 
+------------------+-------------------+--------------+--------------------
+                0 |                 1 |            0 |                  0
+(1 row)
+
+-- check reset
+SELECT * from pg_errors_reset();
+ pg_errors_reset 
+-----------------
+ 
+(1 row)
+
+-- check that reset works
+SELECT * FROM pg_errors;
+ statement_cancel | statement_timeout | lock_timeout | idle_in_tx_timeout 
+------------------+-------------------+--------------+--------------------
+                0 |                 0 |            0 |                  0
+(1 row)
+
+DROP EXTENSION pg_errors;

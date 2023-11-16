@@ -1,0 +1,5 @@
+log/
+results/
+pg_errors.o
+pg_errors.so
+regression*
