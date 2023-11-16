@@ -10,7 +10,6 @@
 PG_MODULE_MAGIC;
 
 /* Location of permanent stats file (valid when database is shut down) */
-//#define PGSS_DUMP_FILE	PGSTAT_STAT_PERMANENT_DIRECTORY "/pg_stat_statements.stat"
 #define PG_ERRORS_DUMP_FILE	PGSTAT_STAT_PERMANENT_DIRECTORY "/pg_errors.stat"
 #define PG_ERRORS_HEADER_MAGIC 0xF0000001
 
