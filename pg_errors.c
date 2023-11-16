@@ -14,12 +14,11 @@
 
 PG_MODULE_MAGIC;
 
-/* Location of permanent stats file (valid when database is shut down) */
 #ifndef PG_MAJORVERSION_NUM
 #define PG_MAJORVERSION_NUM (PG_VERSION_NUM / 100)
 #endif
 
-
+/* Location of permanent stats file (valid when database is shut down) */
 #define PG_ERRORS_DUMP_FILE	PGSTAT_STAT_PERMANENT_DIRECTORY "/pg_errors.stat"
 #define PG_ERRORS_HEADER_MAGIC 0xF0000001
 
