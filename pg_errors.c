@@ -13,7 +13,6 @@ PG_MODULE_MAGIC;
 #define PG_ERRORS_DUMP_FILE	PGSTAT_STAT_PERMANENT_DIRECTORY "/pg_errors.stat"
 #define PG_ERRORS_HEADER_MAGIC 0xF0000001
 
-//static ExecutorEnd_hook_type prev_ExecutorEnd = NULL;
 static emit_log_hook_type prev_log_hook = NULL;
 static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
 
@@ -49,16 +48,10 @@ static void pg_errors_shmem_shutdown(int code, Datum arg);
 static void pg_errors_shmem_startup(void);
 static void pg_errors_shmem_startup_internal(void);
 static Datum pg_errors_get_internal(void);
-//static Datum pg_errors_reset(void);
 
 /* register */
 PG_FUNCTION_INFO_V1(pg_errors_get);
 PG_FUNCTION_INFO_V1(pg_errors_reset);
-
-/*
- * NOTE
- * We have to need to fear the recursive failure, because elog handle it internally.
- */
 
 /*
  =========== EXTERNAL ===========
