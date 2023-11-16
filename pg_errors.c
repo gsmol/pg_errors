@@ -1,17 +1,10 @@
 #include "postgres.h"
-#include <math.h>
-#include <sys/stat.h>
 #include <unistd.h>
-#include "catalog/pg_authid.h"
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
-#include "utils/acl.h"
-#include "utils/builtins.h"
-#include "utils/memutils.h"
-#include "utils/timeout.h"
 #include "postmaster/autovacuum.h"
 
 PG_MODULE_MAGIC;
@@ -41,7 +34,7 @@ typedef struct pg_errors_counter
 
 typedef struct pg_errors_shmem
 {
-	LWLock *lock; /* protect shmem init and file sync */
+	LWLock *lock; /* protect shmem */
 	pg_errors_counter count;
 } pg_errors_shmem;
 
@@ -150,7 +143,13 @@ pg_errors_get_internal(void)
 	bool      nulls[4];
 	Datum     values[4];
 	HeapTuple htup;
-	TupleDesc tupdesc = CreateTemplateTupleDesc(4);
+	TupleDesc tupdesc;
+
+#if PG_VERSION_NUM >= 120000
+		tupdesc = CreateTemplateTupleDesc(4);
+#else
+		tupdesc = CreateTemplateTupleDesc(4, false);
+#endif
 
 	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "statement_cancel",
 					   INT8OID, -1, 0);
