@@ -31,7 +31,7 @@ typedef struct pg_errors_header
 {
 	uint32		magic;
 	uint32		pg_version_num;
-}			pg_errors_header;
+} pg_errors_header;
 
 typedef struct pg_errors_counter
 {
@@ -39,13 +39,13 @@ typedef struct pg_errors_counter
 	pg_atomic_uint64 statement_timeout;
 	pg_atomic_uint64 lock_timeout;
 	pg_atomic_uint64 idle_in_tx_timeout;
-}			pg_errors_counter;
+} pg_errors_counter;
 
 typedef struct pg_errors_shmem
 {
 	LWLock	   *lock;			/* protect shmem */
 	pg_errors_counter count;
-}			pg_errors_shmem;
+} pg_errors_shmem;
 
 /* Shared memory state */
 static pg_errors_shmem * shmem = NULL;
