@@ -237,7 +237,7 @@ init_shmem(void)
 		return;
 
 	fd = OpenTransientFilePerm(PG_ERRORS_DUMP_FILE, O_RDWR | O_CREAT | O_EXCL | PG_BINARY, S_IRUSR | S_IWUSR);
-	if (fd <= 0 && errno == EEXIST)
+	if (fd <= 0 && errno == EEXIST) /* Race */
 		fd = OpenTransientFilePerm(PG_ERRORS_DUMP_FILE, O_RDWR | PG_BINARY, S_IRUSR | S_IWUSR);
 
 	/* Race? Inode or disk space shortage? lets just quit and try our luck next time */
@@ -308,14 +308,14 @@ close:
 	 */
 	if (!is_header_valid())
 	{
-		/* I`m sure that we can do fine without locking, but better safe than sorry */
+		/* I`m sure we can do fine without locking, but better safe than sorry */
 		LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
 		/* do re-check, mayhaps some friendly neighbor already done all the work */
 		if (!is_header_valid())
 		{
 			/* Is current backend is loaded with old library? Our greatest fear */
 			if (shmem->hdr.magic > PG_ERRORS_HEADER_MAGIC)
-				backend_is_tainted = true; /* what if magic got corrupted? */
+				backend_is_tainted = true; /* what if magic got corrupted? Its not nice to do gt with magic. TODO: use hdr.lib_version */
 			else
 			{
 				memset(shmem, 0, sizeof(pg_errors_shmem));
