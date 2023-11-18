@@ -1,13 +1,16 @@
-#include "postgres.h"
 #include <unistd.h>
+#include <sys/stat.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#include "postgres.h"
 #include "funcapi.h"
-#include "miscadmin.h"
 #include "pgstat.h"
 #include "storage/fd.h"
-#include "storage/ipc.h"
 #include "postmaster/autovacuum.h"
 #include "storage/lwlock.h"
-#include "storage/shmem.h"
 
 #if PG_VERSION_NUM < 120000
 #include "catalog/pg_type.h"
@@ -22,15 +25,16 @@ PG_MODULE_MAGIC;
 
 /* Location of permanent stats file (valid when database is shut down) */
 #define PG_ERRORS_DUMP_FILE	PGSTAT_STAT_PERMANENT_DIRECTORY "/pg_errors.stat"
-#define PG_ERRORS_HEADER_MAGIC 0xF0000001
+#define PG_ERRORS_HEADER_MAGIC 0xF001 /* MUST be incremented any time shared struct changes */
 
+bool backend_is_tainted = false;
 static emit_log_hook_type prev_log_hook = NULL;
-static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
 
 typedef struct pg_errors_header
 {
-	uint32		magic;
-	uint32		pg_version_num;
+	uint16		magic;
+	uint16		pg_version_num;
+	uint32      shmem_size;
 } pg_errors_header;
 
 typedef struct pg_errors_counter
@@ -41,24 +45,25 @@ typedef struct pg_errors_counter
 	pg_atomic_uint64 idle_in_tx_timeout;
 } pg_errors_counter;
 
+/* NOTE: any change in this structure MUST come with PG_ERRORS_HEADER_MAGIC change */
 typedef struct pg_errors_shmem
 {
-	LWLock	   *lock;			/* protect shmem */
+	pg_errors_header hdr;
 	pg_errors_counter count;
 } pg_errors_shmem;
 
 /* Shared memory state */
-static pg_errors_shmem * shmem = NULL;
+static pg_errors_shmem *shmem = NULL;
 
 /*---- Function declarations ----*/
 void		_PG_init(void);
 void		_PG_fini(void);
 static void pg_errors_emit_log(ErrorData *edata);
 static void pg_errors_emit_log_internal(ErrorData *edata);
-static void pg_errors_shmem_shutdown(int code, Datum arg);
-static void pg_errors_shmem_startup(void);
-static void pg_errors_shmem_startup_internal(void);
 static Datum pg_errors_get_internal(void);
+static void pg_errors_reset_internal(void);
+static void init_shmem(void);
+static bool is_header_valid(void);
 
 /* register */
 PG_FUNCTION_INFO_V1(pg_errors_get);
@@ -74,21 +79,9 @@ PG_FUNCTION_INFO_V1(pg_errors_reset);
 void
 _PG_init(void)
 {
-
-	if (!process_shared_preload_libraries_in_progress)
-		return;
-
-	RequestAddinShmemSpace(
-						   MAXALIGN(sizeof(pg_errors_shmem))
-		);
-	RequestNamedLWLockTranche("pg_errors", 1);
-
 	/* Setup hooks */
 	prev_log_hook = emit_log_hook;
 	emit_log_hook = pg_errors_emit_log;
-
-	prev_shmem_startup_hook = shmem_startup_hook;
-	shmem_startup_hook = pg_errors_shmem_startup;
 }
 
 /*
@@ -97,18 +90,7 @@ _PG_init(void)
 void
 _PG_fini(void)
 {
-	shmem_startup_hook = prev_shmem_startup_hook;
 	emit_log_hook = prev_log_hook;
-}
-
-/* init shmem for module */
-void
-pg_errors_shmem_startup(void)
-{
-	/* we are bound to do so */
-	if (prev_shmem_startup_hook)
-		prev_shmem_startup_hook();
-	pg_errors_shmem_startup_internal();
 }
 
 void
@@ -118,29 +100,62 @@ pg_errors_emit_log(ErrorData *edata)
 	if (prev_log_hook)
 		prev_log_hook(edata);
 
+	if (edata->elevel < ERROR ||		/* Not interested in noncrit messages */
+		backend_is_tainted ||
+		IsAutoVacuumWorkerProcess() ||
+		in_error_recursion_trouble())	/* avoid recursion in elog */
+		return;
+
+	init_shmem();
+	if (!shmem)
+		return;
+
+	/* sanity, make sure that shared memory structure didnt changed since last access */
+	if (!is_header_valid())
+	{
+		backend_is_tainted = true;
+		return;
+	}
 	pg_errors_emit_log_internal(edata);
 }
 
 Datum
 pg_errors_get(PG_FUNCTION_ARGS)
 {
+	init_shmem();
+	if (!shmem)
+		elog(ERROR, "failed to init shmem");
+	if (!is_header_valid())
+		elog(ERROR, "pg_errors header is invalid");
+
 	return pg_errors_get_internal();
 }
 
 Datum
 pg_errors_reset(PG_FUNCTION_ARGS)
 {
-	pg_atomic_write_u64(&(shmem->count.statement_cancel), 0);
-	pg_atomic_write_u64(&(shmem->count.statement_timeout), 0);
-	pg_atomic_write_u64(&(shmem->count.lock_timeout), 0);
-	pg_atomic_write_u64(&(shmem->count.idle_in_tx_timeout), 0);
+	init_shmem();
+	if (!shmem)
+		elog(ERROR, "failed to init shmem");
+	if (!is_header_valid())
+		elog(ERROR, "pg_errors header is invalid");
+
+	pg_errors_reset_internal();
 	PG_RETURN_VOID();
 }
-
 
 /*
  =========== INTERNAL ===========
  */
+
+void
+pg_errors_reset_internal(void)
+{
+	pg_atomic_write_u64(&(shmem->count.statement_cancel), 0);
+	pg_atomic_write_u64(&(shmem->count.statement_timeout), 0);
+	pg_atomic_write_u64(&(shmem->count.lock_timeout), 0);
+	pg_atomic_write_u64(&(shmem->count.idle_in_tx_timeout), 0);
+}
 
 Datum
 pg_errors_get_internal(void)
@@ -186,24 +201,10 @@ pg_errors_get_internal(void)
 	PG_RETURN_DATUM(HeapTupleGetDatum(htup));
 }
 
+/* the heart of all things */
 void
 pg_errors_emit_log_internal(ErrorData *edata)
 {
-	/* Not interested in noncrit messages */
-	if (edata->elevel < ERROR)
-		return;
-
-	if (IsAutoVacuumWorkerProcess())
-		return;
-
-	/* should not be possible, but better safe than sorry */
-	if (!shmem)
-		return;
-
-	/* avoid recursion */
-	if (in_error_recursion_trouble())
-		return;
-
 	/* increment counters */
 	switch (edata->sqlerrcode)
 	{
@@ -223,121 +224,115 @@ pg_errors_emit_log_internal(ErrorData *edata)
 	/* elog(WARNING, "SQL CODE: %s", unpack_sql_state(edata->sqlerrcode)); */
 }
 
-void
-pg_errors_shmem_startup_internal(void)
-{
-	FILE	   *f = NULL;
-	bool		found = false;
-	pg_errors_header hdr;
-	pg_errors_counter temp;
-
-	/*
-	 * Create or attach to the shared memory
-	 */
-	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
-	shmem = ShmemInitStruct("pg_errors",
-							sizeof(pg_errors_shmem),
-							&found);
-	LWLockRelease(AddinShmemInitLock);
-
-	/*
-	 * If we're in the postmaster (or a standalone backend...), set up a shmem
-	 * exit hook to dump the statistics to disk.
-	 */
-	if (!IsUnderPostmaster)
-		on_shmem_exit(pg_errors_shmem_shutdown, (Datum) 0);
-
-	/* attached */
-	if (found)
-		return;
-
-	/* First time, eh ... */
-	shmem->lock = &(GetNamedLWLockTranche("pg_errors"))->lock;
-	pg_atomic_exchange_u64(&shmem->count.statement_cancel, 0);
-	pg_atomic_exchange_u64(&shmem->count.statement_timeout, 0);
-	pg_atomic_exchange_u64(&shmem->count.lock_timeout, 0);
-	pg_atomic_exchange_u64(&shmem->count.idle_in_tx_timeout, 0);
-
-	/*
-	 * Attempt to load old statistics
-	 */
-	f = AllocateFile(PG_ERRORS_DUMP_FILE, PG_BINARY_R);
-	if (f == NULL)
-	{
-		if (errno == ENOENT)
-			return;				/* No existing persisted file, so we're done */
-
-		/* failed to open file due to some external reason */
-		ereport(WARNING,
-				(errcode_for_file_access(),
-				 errmsg("could not allocate file \"%s\": %m", PG_ERRORS_DUMP_FILE)));
-		goto err;
-	}
-
-	if ((fread(&hdr, sizeof(pg_errors_header), 1, f) != 1) ||
-		(fread(&temp, sizeof(pg_errors_counter), 1, f) != 1))
-	{
-		ereport(WARNING,
-				(errcode_for_file_access(),
-				 errmsg("could not read file \"%s\": %m", PG_ERRORS_DUMP_FILE)));
-		goto err;
-	}
-
-	/* LWLockAcquire(shmem->lock, LW_EXCLUSIVE); */
-	/* rc = fread(&(shmem->count), sizeof(pg_errors_counter), 1, f); */
-	/* LWLockRelease(shmem->lock); */
-
-	/* validate header */
-	if (hdr.magic != PG_ERRORS_HEADER_MAGIC || hdr.pg_version_num != PG_MAJORVERSION_NUM)
-		goto err;
-
-	pg_atomic_add_fetch_u64(&shmem->count.statement_cancel, temp.statement_cancel.value);
-	pg_atomic_add_fetch_u64(&shmem->count.statement_timeout, temp.statement_timeout.value);
-	pg_atomic_add_fetch_u64(&shmem->count.lock_timeout, temp.lock_timeout.value);
-	pg_atomic_add_fetch_u64(&shmem->count.idle_in_tx_timeout, temp.idle_in_tx_timeout.value);
-
-err:
-	if (f && FreeFile(f))
-		ereport(WARNING,
-				(errcode_for_file_access(),
-				 errmsg("could not close file \"%s\": %m", PG_ERRORS_DUMP_FILE)));
-	unlink(PG_ERRORS_DUMP_FILE);
-}
-
 /*
- * shmem_shutdown hook: Dump statistics into file
+ * Open file
  */
 void
-pg_errors_shmem_shutdown(int code, Datum arg)
+init_shmem(void)
 {
-	FILE	   *f = NULL;
-	pg_errors_header hdr;
+	int fd = 0;
+	struct stat sb;
 
-	hdr.magic = PG_ERRORS_HEADER_MAGIC;
-	hdr.pg_version_num = PG_MAJORVERSION_NUM;
+	if (shmem) /* already mmaped */
+		return;
 
-	/* Don't try to dump during a crash. */
-	if (code || !shmem)
+	fd = OpenTransientFilePerm(PG_ERRORS_DUMP_FILE, O_RDWR | O_CREAT | O_EXCL | PG_BINARY, S_IRUSR | S_IWUSR);
+	if (fd <= 0 && errno == EEXIST)
+		fd = OpenTransientFilePerm(PG_ERRORS_DUMP_FILE, O_RDWR | PG_BINARY, S_IRUSR | S_IWUSR);
+
+	/* Race? Inode or disk space shortage? lets just quit and try our luck next time */
+	if (fd <= 0)
+	{
+		ereport(WARNING,
+			(errcode_for_file_access(),
+			 errmsg("could not open file \"%s\": %m", PG_ERRORS_DUMP_FILE)));
+		return;
+	}
+
+	/* Get file size */
+    if (fstat(fd, &sb) == -1)
+	{
+		ereport(WARNING,
+			(errcode_for_file_access(),
+			 errmsg("could not fstat file \"%s\": %m", PG_ERRORS_DUMP_FILE)));
+        goto close;
+	}
+
+	/*
+	 * Truncate up to shmem size, we dont want to risk SIGBUS.
+	 * Because two different backends could theoretically load two different
+	 * versions of library (e.g. due to library upgrade) with different pg_errors_shmem.
+	 */
+	if (sb.st_size < sizeof(pg_errors_shmem) && ftruncate(fd, sizeof(pg_errors_shmem)) < 0)
+	{
+		ereport(WARNING,
+			(errcode_for_file_access(),
+			 errmsg("could not truncate file \"%s\": %m", PG_ERRORS_DUMP_FILE)));
+		goto close;
+	}
+	/* Never truncate down */
+	else if (sb.st_size > sizeof(pg_errors_shmem))
+	{
+		/* backend is probably running old library, backend is tainted */
+		backend_is_tainted = true;
+		goto close;
+	}
+
+	shmem = mmap(NULL, sizeof(pg_errors_shmem), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (shmem == MAP_FAILED)
+	{
+        ereport(WARNING,
+			(errmsg("could not mmap file \"%s\": %m", PG_ERRORS_DUMP_FILE)));
+		shmem = NULL;
+	}
+
+close:
+	if (fd > 0 && CloseTransientFile(fd) != 0)
+	{
+		ereport(WARNING,
+			(errcode_for_file_access(),
+			 errmsg("could not close file \"%s\": %m", PG_ERRORS_DUMP_FILE)));
+		return;
+	}
+
+	if (!shmem)
 		return;
 
 	/*
-	 * Open temp file, dump stats, fsync and rename into place, so we
-	 * atomically replace any old one.
+	 * Validate header in shmem, possible cases:
+	 *  - freshly created file
+	 * 	- file corruption
+	 *  - module upgrade
+	 *  - current backend is running old version library
+	 *  - PostgreSQL major version upgrade
 	 */
-	f = AllocateFile(PG_ERRORS_DUMP_FILE ".tmp", PG_BINARY_W);
-	if (f == NULL)
-		ereport(WARNING,
-				(errcode_for_file_access(),
-				 errmsg("could not open for writing file \"%s\": %m",
-						PG_ERRORS_DUMP_FILE ".tmp")));
+	if (!is_header_valid())
+	{
+		/* I`m sure that we can do fine without locking, but better safe than sorry */
+		LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
+		/* do re-check, mayhaps some friendly neighbor already done all the work */
+		if (!is_header_valid())
+		{
+			/* Is current backend is loaded with old library? */
+			if (shmem->hdr.magic > PG_ERRORS_HEADER_MAGIC)
+				backend_is_tainted = true; /* what if magic got corrupted ? */
+			else
+			{
+				memset(shmem, 0, sizeof(pg_errors_shmem));
+				shmem->hdr.magic = PG_ERRORS_HEADER_MAGIC;
+				shmem->hdr.pg_version_num = PG_MAJORVERSION_NUM;
+				shmem->hdr.shmem_size = sizeof(pg_errors_shmem);
+			}
+		}
+		LWLockRelease(AddinShmemInitLock);
+	}
+}
 
-	else if ((fwrite(&hdr, sizeof(pg_errors_header), 1, f) == 1) &&
-			 fwrite(&(shmem->count), sizeof(pg_errors_counter), 1, f) == 1)
-		durable_rename(PG_ERRORS_DUMP_FILE ".tmp", PG_ERRORS_DUMP_FILE, WARNING);
-
-	if (f && FreeFile(f))
-		ereport(WARNING,
-				(errcode_for_file_access(),
-				 errmsg("could not write file \"%s\": %m",
-						PG_ERRORS_DUMP_FILE ".tmp")));
+/* Sanity check for header magic, pg_version and expected shmem size */
+bool
+is_header_valid(void)
+{
+	return (shmem->hdr.magic == PG_ERRORS_HEADER_MAGIC &&
+			shmem->hdr.pg_version_num == PG_MAJORVERSION_NUM &&
+			shmem->hdr.shmem_size == sizeof(pg_errors_shmem));
 }

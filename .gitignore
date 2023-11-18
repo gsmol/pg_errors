@@ -1,5 +1,6 @@
 log/
 results/
+tmp_check/
 pg_errors.o
 pg_errors.so
 regression*
