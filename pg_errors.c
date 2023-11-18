@@ -65,7 +65,7 @@ static void pg_errors_reset_internal(void);
 static void init_shmem(void);
 static bool is_header_valid(void);
 
-/* register */
+/* Register */
 PG_FUNCTION_INFO_V1(pg_errors_get);
 PG_FUNCTION_INFO_V1(pg_errors_reset);
 
@@ -258,23 +258,23 @@ init_shmem(void)
         goto close;
 	}
 
+	/* Never truncate down */
+	if (sb.st_size > sizeof(pg_errors_shmem))
+	{
+		/* backend is probably running old library, backend is tainted */
+		backend_is_tainted = true;
+		goto close;
+	}
 	/*
 	 * Truncate up to shmem size, we dont want to risk SIGBUS.
 	 * Because two different backends could theoretically load two different
 	 * versions of library (e.g. due to library upgrade) with different pg_errors_shmem.
 	 */
-	if (sb.st_size < sizeof(pg_errors_shmem) && ftruncate(fd, sizeof(pg_errors_shmem)) < 0)
+	else if (sb.st_size < sizeof(pg_errors_shmem) && ftruncate(fd, sizeof(pg_errors_shmem)) < 0)
 	{
 		ereport(WARNING,
 			(errcode_for_file_access(),
 			 errmsg("could not truncate file \"%s\": %m", PG_ERRORS_DUMP_FILE)));
-		goto close;
-	}
-	/* Never truncate down */
-	else if (sb.st_size > sizeof(pg_errors_shmem))
-	{
-		/* backend is probably running old library, backend is tainted */
-		backend_is_tainted = true;
 		goto close;
 	}
 
@@ -299,11 +299,11 @@ close:
 		return;
 
 	/*
-	 * Validate header in shmem, possible cases:
+	 * Validate header in freshly mmaped shmem, possible cases:
 	 *  - freshly created file
 	 * 	- file corruption
 	 *  - module upgrade
-	 *  - current backend is running old version library
+	 *  - current backend is running old version library (special note)
 	 *  - PostgreSQL major version upgrade
 	 */
 	if (!is_header_valid())
@@ -313,9 +313,9 @@ close:
 		/* do re-check, mayhaps some friendly neighbor already done all the work */
 		if (!is_header_valid())
 		{
-			/* Is current backend is loaded with old library? */
+			/* Is current backend is loaded with old library? Our greatest fear */
 			if (shmem->hdr.magic > PG_ERRORS_HEADER_MAGIC)
-				backend_is_tainted = true; /* what if magic got corrupted ? */
+				backend_is_tainted = true; /* what if magic got corrupted? */
 			else
 			{
 				memset(shmem, 0, sizeof(pg_errors_shmem));
