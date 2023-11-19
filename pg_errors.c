@@ -224,7 +224,13 @@ pg_errors_emit_log_internal(ErrorData *edata)
 	/* elog(WARNING, "SQL CODE: %s", unpack_sql_state(edata->sqlerrcode)); */
 }
 
-/* open dump file (create if none) and mmap it into shared memory */
+/*
+ * Open dump file (create if none), truncate it (if required) and mmap it into shared memory
+ * NOTE
+ * We must do our best to be as forward-compatible as possible, i.e.
+ * all possible avenues of introducing incompatibilities in the future
+ * must be factored NOW and sanity check for them must be implemented NOW
+ */
 void
 init_shmem(void)
 {
