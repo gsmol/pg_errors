@@ -25,8 +25,8 @@ PG_MODULE_MAGIC;
 
 /* Location stats file */
 #define PG_ERRORS_DUMP_FILE	PGSTAT_STAT_PERMANENT_DIRECTORY "/pg_errors.stat"
-#define PG_ERRORS_HEADER_MAGIC 0xF2A9E150
-#define PG_ERRORS_LIB_VERSION 0x0001 /* MUST be incremented any time shared struct changes */
+#define PG_ERRORS_HEADER_MAGIC	0xF2A9E150
+#define PG_ERRORS_LIB_VERSION	0x0001 /* MUST be incremented any time shared struct changes */
 
 bool backend_is_tainted = false;
 static emit_log_hook_type prev_log_hook = NULL;
