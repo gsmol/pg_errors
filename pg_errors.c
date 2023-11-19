@@ -25,31 +25,33 @@ PG_MODULE_MAGIC;
 
 /* Location of permanent stats file (valid when database is shut down) */
 #define PG_ERRORS_DUMP_FILE	PGSTAT_STAT_PERMANENT_DIRECTORY "/pg_errors.stat"
-#define PG_ERRORS_HEADER_MAGIC 0xF001 /* MUST be incremented any time shared struct changes */
+#define PG_ERRORS_HEADER_MAGIC 0xF2A9E150
+#define PG_ERRORS_LIB_VERSION 0x0001 /* MUST be incremented any time shared struct changes */
 
 bool backend_is_tainted = false;
 static emit_log_hook_type prev_log_hook = NULL;
 
 typedef struct pg_errors_header
 {
-	uint16		magic;
-	uint16		pg_version_num;
-	uint32      shmem_size;
+	uint32	magic;
+	uint16	shmem_size;
+	uint16	pg_version_num;
+	uint16	lib_version_num;
 } pg_errors_header;
 
 typedef struct pg_errors_counter
 {
-	pg_atomic_uint64 statement_cancel;
-	pg_atomic_uint64 statement_timeout;
-	pg_atomic_uint64 lock_timeout;
-	pg_atomic_uint64 idle_in_tx_timeout;
+	pg_atomic_uint64	statement_cancel;
+	pg_atomic_uint64	statement_timeout;
+	pg_atomic_uint64	lock_timeout;
+	pg_atomic_uint64	idle_in_tx_timeout;
 } pg_errors_counter;
 
-/* NOTE: any change in this structure MUST come with PG_ERRORS_HEADER_MAGIC change */
+/* NOTE: any change in this structure MUST come with PG_ERRORS_LIB_VERSION change */
 typedef struct pg_errors_shmem
 {
-	pg_errors_header hdr;
-	pg_errors_counter count;
+	pg_errors_header	hdr;
+	pg_errors_counter	count;
 } pg_errors_shmem;
 
 /* Shared memory state */
@@ -58,10 +60,10 @@ static pg_errors_shmem *shmem = NULL;
 /*---- Function declarations ----*/
 void		_PG_init(void);
 void		_PG_fini(void);
-static void pg_errors_emit_log(ErrorData *edata);
-static void pg_errors_emit_log_internal(ErrorData *edata);
+static void	pg_errors_emit_log(ErrorData *edata);
+static void	pg_errors_emit_log_internal(ErrorData *edata);
 static Datum pg_errors_get_internal(void);
-static void pg_errors_reset_internal(void);
+static void	pg_errors_reset_internal(void);
 static void init_shmem(void);
 static bool is_header_valid(void);
 
@@ -104,7 +106,7 @@ pg_errors_emit_log(ErrorData *edata)
 		backend_is_tainted ||
 		IsAutoVacuumWorkerProcess() ||
 		in_error_recursion_trouble())	/* avoid recursion in elog */
-		return;
+			return;
 
 	init_shmem();
 	if (!shmem)
@@ -224,9 +226,7 @@ pg_errors_emit_log_internal(ErrorData *edata)
 	/* elog(WARNING, "SQL CODE: %s", unpack_sql_state(edata->sqlerrcode)); */
 }
 
-/*
- * Open file
- */
+/* open dump file (create if none) and mmap it into shared memory */
 void
 init_shmem(void)
 {
@@ -250,12 +250,12 @@ init_shmem(void)
 	}
 
 	/* Get file size */
-    if (fstat(fd, &sb) == -1)
+	if (fstat(fd, &sb) == -1)
 	{
 		ereport(WARNING,
 			(errcode_for_file_access(),
 			 errmsg("could not fstat file \"%s\": %m", PG_ERRORS_DUMP_FILE)));
-        goto close;
+		goto close;
 	}
 
 	/* Never truncate down */
@@ -279,9 +279,9 @@ init_shmem(void)
 	}
 
 	shmem = mmap(NULL, sizeof(pg_errors_shmem), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (shmem == MAP_FAILED)
+	if (shmem == MAP_FAILED)
 	{
-        ereport(WARNING,
+		ereport(WARNING,
 			(errmsg("could not mmap file \"%s\": %m", PG_ERRORS_DUMP_FILE)));
 		shmem = NULL;
 	}
@@ -295,6 +295,7 @@ close:
 		return;
 	}
 
+	/* better luck next time */
 	if (!shmem)
 		return;
 
@@ -314,12 +315,15 @@ close:
 		if (!is_header_valid())
 		{
 			/* Is current backend is loaded with old library? Our greatest fear */
-			if (shmem->hdr.magic > PG_ERRORS_HEADER_MAGIC)
-				backend_is_tainted = true; /* what if magic got corrupted? Its not nice to do gt with magic. TODO: use hdr.lib_version */
+			if (shmem->hdr.magic == PG_ERRORS_HEADER_MAGIC &&
+				shmem->hdr.pg_version_num == PG_MAJORVERSION_NUM &&
+				shmem->hdr.lib_version_num > PG_ERRORS_LIB_VERSION)
+					backend_is_tainted = true;
 			else
 			{
 				memset(shmem, 0, sizeof(pg_errors_shmem));
 				shmem->hdr.magic = PG_ERRORS_HEADER_MAGIC;
+				shmem->hdr.lib_version_num = PG_ERRORS_LIB_VERSION;
 				shmem->hdr.pg_version_num = PG_MAJORVERSION_NUM;
 				shmem->hdr.shmem_size = sizeof(pg_errors_shmem);
 			}
@@ -328,11 +332,12 @@ close:
 	}
 }
 
-/* Sanity check for header magic, pg_version and expected shmem size */
+/* Sanity check for header magic, lib_version, pg_version and expected shmem size */
 bool
 is_header_valid(void)
 {
 	return (shmem->hdr.magic == PG_ERRORS_HEADER_MAGIC &&
+			shmem->hdr.lib_version_num == PG_ERRORS_LIB_VERSION &&
 			shmem->hdr.pg_version_num == PG_MAJORVERSION_NUM &&
 			shmem->hdr.shmem_size == sizeof(pg_errors_shmem));
 }
