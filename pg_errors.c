@@ -71,9 +71,7 @@ static bool is_header_valid(void);
 PG_FUNCTION_INFO_V1(pg_errors_get);
 PG_FUNCTION_INFO_V1(pg_errors_reset);
 
-/*
- =========== EXTERNAL ===========
- */
+/*----------- EXTERNAL -----------*/
 
 /*
  * Module load callback
@@ -144,10 +142,9 @@ pg_errors_reset(PG_FUNCTION_ARGS)
 	PG_RETURN_VOID();
 }
 
-/*
- =========== INTERNAL ===========
- */
+/*----------- INTERNAL -----------*/
 
+/* Reset counters */
 void
 pg_errors_reset_internal(void)
 {
@@ -157,6 +154,7 @@ pg_errors_reset_internal(void)
 	pg_atomic_write_u64(&(shmem->count.idle_in_tx_timeout), 0);
 }
 
+/* Cast pg_errors_counter into tuple and return it */
 Datum
 pg_errors_get_internal(void)
 {
@@ -201,7 +199,7 @@ pg_errors_get_internal(void)
 	PG_RETURN_DATUM(HeapTupleGetDatum(htup));
 }
 
-/* the heart of all things */
+/* The heart of all things */
 void
 pg_errors_emit_log_internal(ErrorData *edata)
 {
