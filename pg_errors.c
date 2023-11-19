@@ -114,10 +114,8 @@ pg_errors_emit_log(ErrorData *edata)
 
 	/* sanity, make sure that shared memory structure didnt changed since last access */
 	if (!is_header_valid())
-	{
-		backend_is_tainted = true;
 		return;
-	}
+
 	pg_errors_emit_log_internal(edata);
 }
 
@@ -262,7 +260,7 @@ init_shmem(void)
 	if (sb.st_size > sizeof(pg_errors_shmem))
 	{
 		/* backend is probably running old library, backend is tainted */
-		backend_is_tainted = true;
+		backend_is_tainted = true; /* TODO: this is probably redundant here due to lib_version check */
 		goto close;
 	}
 	/*
