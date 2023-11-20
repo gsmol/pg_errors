@@ -300,7 +300,7 @@ close:
 	/*
 	 * Validate header in freshly mmaped shmem, possible cases:
 	 *  - freshly created file
-	 * 	- file corruption
+	 *  - file corruption
 	 *  - module upgrade
 	 *  - current backend is running old version library (special note)
 	 *  - PostgreSQL major version upgrade
