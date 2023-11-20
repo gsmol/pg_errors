@@ -60,10 +60,10 @@ static pg_errors_shmem *shmem = NULL;
 /*---- Function declarations ----*/
 void		_PG_init(void);
 void		_PG_fini(void);
-static void	pg_errors_emit_log(ErrorData *edata);
-static void	pg_errors_emit_log_internal(ErrorData *edata);
+static void pg_errors_emit_log(ErrorData *edata);
+static void pg_errors_emit_log_internal(ErrorData *edata);
 static Datum pg_errors_get_internal(void);
-static void	pg_errors_reset_internal(void);
+static void pg_errors_reset_internal(void);
 static void init_shmem(void);
 static bool is_header_valid(void);
 
@@ -169,30 +169,26 @@ pg_errors_get_internal(void)
 	tupdesc = CreateTemplateTupleDesc(4, false);
 #endif
 
-	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "statement_cancel",
-					   INT8OID, -1, 0);
-	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "statement_timeout",
-					   INT8OID, -1, 0);
-	TupleDescInitEntry(tupdesc, (AttrNumber) 3, "lock_timeout",
-					   INT8OID, -1, 0);
-	TupleDescInitEntry(tupdesc, (AttrNumber) 4, "idle_in_tx_timeout",
-					   INT8OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "statement_cancel", INT8OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "statement_timeout", INT8OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 3, "lock_timeout", INT8OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 4, "idle_in_tx_timeout", INT8OID, -1, 0);
 	tupdesc = BlessTupleDesc(tupdesc);
 
 	values[0] = UInt64GetDatum(
-							   pg_atomic_read_u64(&(shmem->count.statement_cancel)));
+		pg_atomic_read_u64(&(shmem->count.statement_cancel)));
 	nulls[0] = false;
 
 	values[1] = UInt64GetDatum(
-							   pg_atomic_read_u64(&(shmem->count.statement_timeout)));
+		pg_atomic_read_u64(&(shmem->count.statement_timeout)));
 	nulls[1] = false;
 
 	values[2] = UInt64GetDatum(
-							   pg_atomic_read_u64(&(shmem->count.lock_timeout)));
+		pg_atomic_read_u64(&(shmem->count.lock_timeout)));
 	nulls[2] = false;
 
 	values[3] = UInt64GetDatum(
-							   pg_atomic_read_u64(&(shmem->count.idle_in_tx_timeout)));
+		pg_atomic_read_u64(&(shmem->count.idle_in_tx_timeout)));
 	nulls[3] = false;
 
 	htup = heap_form_tuple(tupdesc, values, nulls);
