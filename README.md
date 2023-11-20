@@ -55,9 +55,6 @@ Usually, you have to only install new version of `pg_errors`, do `ALTER EXTENSIO
 
 ## Tests
 
-TODO
-
-## TODO
-
-* do not rely on PostgreSQL shmem
-* flag to disable extension
+```shell
+make check
+```
