@@ -14,6 +14,8 @@
 #if PG_VERSION_NUM < 120000
 #include "catalog/pg_type.h"
 #include "access/htup_details.h"
+#elif PG_VERSION_NUM > 120000 && PG_VERSION_NUM < 130000
+#include "catalog/pg_type_d.h"
 #endif
 
 PG_MODULE_MAGIC;
@@ -22,10 +24,14 @@ PG_MODULE_MAGIC;
 #define PG_MAJORVERSION_NUM (PG_VERSION_NUM / 100)
 #endif
 
+#if PG_VERSION_NUM < 110000
+#define OpenTransientFilePerm(a, b, c) OpenTransientFile(a, b, c)
+#endif
+
 /* Location stats file */
 #define PG_ERRORS_DUMP_FILE	PGSTAT_STAT_PERMANENT_DIRECTORY "/pg_errors.stat"
 #define PG_ERRORS_HEADER_MAGIC	0xF2A9E150
-#define PG_ERRORS_LIB_VERSION	0x0002 /* MUST be incremented any time shared struct changes */
+#define PG_ERRORS_ABI_VERSION	0x0003 /* MUST be incremented any time shared struct changes */
 
 bool backend_is_tainted = false;
 static emit_log_hook_type prev_log_hook = NULL;
@@ -35,7 +41,7 @@ typedef struct pg_errors_header
 	uint32	magic;
 	uint16	shmem_size;
 	uint16	pg_version_num;
-	uint16	lib_version_num;
+	uint16	abi_version_num;
 } pg_errors_header;
 
 typedef struct pg_errors_counter
@@ -46,7 +52,7 @@ typedef struct pg_errors_counter
 	pg_atomic_uint64	idle_in_tx_timeout;
 } pg_errors_counter;
 
-/* NOTE: any change in this structure MUST come with PG_ERRORS_LIB_VERSION change */
+/* NOTE: any change in this structure MUST come with PG_ERRORS_ABI_VERSION change */
 typedef struct pg_errors_shmem
 {
 	pg_errors_header	hdr;
@@ -259,7 +265,7 @@ init_shmem(void)
 	if (sb.st_size > sizeof(pg_errors_shmem))
 	{
 		/* backend is probably running old library, backend is tainted */
-		backend_is_tainted = true; /* TODO: this is probably redundant here due to lib_version check */
+		backend_is_tainted = true; /* TODO: this is probably redundant here due to abi_version check */
 		goto close;
 	}
 	/*
@@ -314,13 +320,13 @@ close:
 			/* Is current backend is loaded with old library? Our greatest fear */
 			if (shmem->hdr.magic == PG_ERRORS_HEADER_MAGIC &&
 				shmem->hdr.pg_version_num == PG_MAJORVERSION_NUM &&
-				shmem->hdr.lib_version_num > PG_ERRORS_LIB_VERSION)
+				shmem->hdr.abi_version_num > PG_ERRORS_ABI_VERSION)
 					backend_is_tainted = true;
 			else
 			{
 				memset(shmem, 0, sizeof(pg_errors_shmem));
 				shmem->hdr.magic = PG_ERRORS_HEADER_MAGIC;
-				shmem->hdr.lib_version_num = PG_ERRORS_LIB_VERSION;
+				shmem->hdr.abi_version_num = PG_ERRORS_ABI_VERSION;
 				shmem->hdr.pg_version_num = PG_MAJORVERSION_NUM;
 				shmem->hdr.shmem_size = sizeof(pg_errors_shmem);
 			}
@@ -334,7 +340,7 @@ bool
 is_header_valid(void)
 {
 	return (shmem->hdr.magic == PG_ERRORS_HEADER_MAGIC &&
-			shmem->hdr.lib_version_num == PG_ERRORS_LIB_VERSION &&
+			shmem->hdr.abi_version_num == PG_ERRORS_ABI_VERSION &&
 			shmem->hdr.pg_version_num == PG_MAJORVERSION_NUM &&
 			shmem->hdr.shmem_size == sizeof(pg_errors_shmem));
 }
